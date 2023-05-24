@@ -10,6 +10,7 @@ from myDataSet import myDataSet
 import evaluater
 import time
 import matplotlib.pyplot as plt
+from mylogging import myLogger
 
 class PCA_matcher():
     def __init__(self, n_components="mle"):
@@ -20,56 +21,73 @@ class PCA_matcher():
     def train(self, pics, normalize=None):
         if normalize is None:
             normalize = PCA_matcher.Default_normalize
-        #先归一化
-        imgs = normalize(pics)
-        #把每一个图片（2维矩阵）拉成一条向量
+
+        #把每一个图片先归一化为2维矩阵（灰度图），然后拉成一条向量
         trainItemList = []
-        for img in imgs:
-            trainItemList.append(img.reshape(-1))
+        for img in pics:
+            trainItemList.append(normalize(img).reshape(-1))
         
         trainItemMat = np.stack(trainItemList)
         
         self.PCA_model.fit(trainItemMat)
         
-        print ('所保留的n个成分各自的方差百分比:',self.PCA_model.explained_variance_ratio_ )
-        print ('所保留的n个成分各自的方差值:',self.PCA_model.explained_variance_  )
-        
+        myLogger.info('所保留的n个成分各自的方差百分比:{}'.format(self.PCA_model.explained_variance_ratio_ ))
+        myLogger.info('所保留的n个成分各自的方差值:{}'.format(self.PCA_model.explained_variance_  ))
+        myLogger.info("方差总占比：{:.3f}".format(self.PCA_model.explained_variance_ratio_.sum()))
         return
     
     #计算相似度，采用距离作为相似度，norm为范数阶数
     def matchOneObj(self, base, target, norm=2):
-        base_new = self.PCA_model.transform(base.reshape(-1))
-        target_new = self.PCA_model.transform(target.reshape(-1))
+        base_new = self.PCA_model.transform(base.reshape(1,-1))
+        target_new = self.PCA_model.transform(target.reshape(1,-1))
+        #print(base_new.shape)
+        res = np.linalg.norm(target_new-base_new, norm)
 
-        return np.linalg.norm(target_new-base_new, norm)
+        #print(res)
+        return res
+
+    def matchObjInFeature(self, baseFeature, targetFeature, norm=2):
+        res = res = np.linalg.norm(baseFeature-targetFeature, norm)
+        return res
+
+    def transform(self, pic):
+        assert len(pic.shape) == 2
+        feature = self.PCA_model.transform(pic.reshape(1,-1))
+
+        return feature
 
 
     def MatchObjInSecene(self, objs, sceneBboxes, scenesImgs, distanceThreshold, norm = 2, normalize = None):
         if normalize is None:
             normalize = PCA_matcher.Default_normalize
         
+        objFeatures = []
+        for objImg in objs:
+            objFeatures.append(self.transform(objImg))
+
         res = []
-        
+        minDistancesForEachScene = -np.ones(len(scenesImgs))
         for i,sceneImg in enumerate(scenesImgs):
-            print("pictures：{}".format(i))
+            #print("pictures：{}".format(i))
             bboxes = sceneBboxes[i]
             target_items = boxes.get_targetItems_by_boxes(sceneImg, np.array(bboxes).reshape(-1,4))
             #print(sceneImg.shape)
             #print(bboxes)
             if bboxes.size == 0:
-                print("scene id:{} no targets detected\n".format(i))
+                myLogger.info("scene id:{} no targets detected\n".format(i))
                 res.append(-1)
+                minDistancesForEachScene[i] = float("inf")
                 continue
 
             #记录每个box与obj图片距离最小值
             distanceMinMatchForEachBox = np.zeros(bboxes.shape[0])
 
             for index in range(bboxes.shape[0]):
-                target_item = normalize(target_items[index])
+                target_item_feature = self.transform(normalize(target_items[index]))
 
                 minDistance = float("inf")
-                for objImg in objs:
-                    distance = self.matchOneObj(objImg, target_item, norm)
+                for objFeature in objFeatures:
+                    distance = self.matchObjInFeature(objFeature, target_item_feature, norm)
                     if minDistance > distance:
                         minDistance = distance
                 
@@ -77,39 +95,36 @@ class PCA_matcher():
 
             minDistId = distanceMinMatchForEachBox.argmin()
             minDist = distanceMinMatchForEachBox[minDistId]
-            print(minDist)
+            
+            minDistancesForEachScene[i] = minDist
+            #print(minDist)
             if minDist > distanceThreshold:
                 res.append(-1)
             else:
                 res.append(minDistId)
 
-        return res
-
-    def Default_normalize(pics, width = 400, height = 400):
+        return np.array(res),minDistancesForEachScene
+    
+    #默认图片归一化函数，先转化为灰度图，然后做灰度拉伸和直方图均衡
+    def Default_normalize(pic, width = 400, height = 400):
         #直方图均衡函数
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)) 
         
-        if type(pics) == np.ndarray:
-            assert len(pics.shape) == 3
-            pics = [pics]
+        assert type(pic) == np.ndarray
+        assert len(pic.shape) == 3
         
-        
-        newPics = []
-        for pic in pics: 
-            #print(type(pic),pic.shape)
-            assert type(pic) == np.ndarray and len(pic.shape) == 3
-            newImg = cv2.resize(pic, (width,height),interpolation=cv2.INTER_CUBIC)
-            newImg = cv2.cvtColor(newImg,cv2.COLOR_BGR2GRAY)
-            #灰度拉伸
-            minEl = newImg.min()
-            maxEl = newImg.max()
-            newImg = ((newImg - minEl)*(255/(maxEl - minEl))).astype(np.uint8)
-            #直方图均衡
-            newImg = clahe.apply(newImg)
-            
-            newPics.append(newImg)
-            
-        return newPics
+        #print(type(pic),pic.shape)
+        assert type(pic) == np.ndarray and len(pic.shape) == 3
+        newImg = cv2.resize(pic, (width,height),interpolation=cv2.INTER_CUBIC)
+        newImg = cv2.cvtColor(newImg,cv2.COLOR_BGR2GRAY)
+        #灰度拉伸
+        minEl = newImg.min()
+        maxEl = newImg.max()
+        newImg = ((newImg - minEl)*(255/(maxEl - minEl))).astype(np.uint8)
+        #直方图均衡
+        newImg = clahe.apply(newImg)
+               
+        return newImg
     
 
 

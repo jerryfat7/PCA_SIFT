@@ -33,9 +33,11 @@ class SIFT_matcher():
     
     # 特征向量判定距离默认采用一范数，可选：NORM_L1 ,NORM_L2 ,NORM_L2SQR ,NORM_INF, NORM_HAMMING ,NORM_HAMMING2  
     #imgMode:{"Gray","RGB","HSV"}
+    #若使用normalize，色彩空间转换需要在normalize中完成
     def MatchObjInSeceneUsingMaxMatches(self, objs, sceneBboxes, scenesImgs,pointsThreshold,picturesThreshold, 
                                         ratio = 0.7, normType = cv2.NORM_L1,
-                                        MatchesNumPrior = False, usingFlann=True, imgMode="Gray"):
+                                        MatchesNumPrior = False, usingFlann=True, imgMode="RGB", 
+                                        normalize = None):
         """
         input:objs,一个list，每个元素为同一个杯子的多角度图片
         sceneBboxes：一个场景里杯子的bboxes，是一个list，其中每一个元素为一个numpy/Tensor
@@ -43,7 +45,14 @@ class SIFT_matcher():
         scnensImgs：一个list，每个list中是一个numpy/Tensor格式的场景图片
         
         """
-        
+        #图片归一化
+        if normalize == None:
+            if imgMode == "RGB":
+                normalize = SIFT_matcher.defaultNormalize
+            elif imgMode == "Gray":
+                normalize = lambda x: SIFT_matcher.GrayNorm(cv2.cvtColor(x, cv2.COLOR_BGR2GRAY))
+            elif imgMode == "HSV":
+                normalize = lambda x: cv2.cvtColor(x, cv2.COLOR_BGR2HSV)
         #匹配器
         #flann算法匹配
         if usingFlann:
@@ -60,6 +69,8 @@ class SIFT_matcher():
         #先计算所有的特写图片的特征向量
         objInfos = []
         for obj in objs:
+            obj = normalize(obj)
+
             keypoints = dict()
             descriptors = dict()
             #print(obj.shape)
@@ -68,13 +79,11 @@ class SIFT_matcher():
                 keypoints["G"], descriptors["G"] = self.detectAndCompute(obj[:,:,1])
                 keypoints["B"], descriptors["B"] = self.detectAndCompute(obj[:,:,2])
             elif imgMode == "Gray":
-                t_obj = cv2.cvtColor(obj,cv2.COLOR_BGR2GRAY)
-                keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(t_obj)
+                keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(obj)
             elif imgMode == "HSV":
-                temp_obj = cv2.cvtColor(obj,cv2.COLOR_BGR2HSV)
-                h_obj, s, v = cv2.split(temp_obj)
+                h_obj, s, v = cv2.split(obj)
                 #仅使用H通道
-                keypoints["H"],descriptors["H"] = self.detectAndCompute(h_obj)
+                keypoints["H"],descriptors["H"] = self.detectAndCompute(obj)
                 print(h_obj)
                 print(descriptors["H"].shape)
             else:
@@ -92,6 +101,7 @@ class SIFT_matcher():
             if bboxes.size == 0:
                 myLogger.info("scene id:{} no targets detected\n".format(i))
                 res.append(-1)
+                MaxMatchesEachScene[i] = 0
                 continue
             #记录每个box与obj图片的matches匹配数量
             picturesForEachBox = np.zeros(bboxes.shape[0])
@@ -100,7 +110,7 @@ class SIFT_matcher():
             
             #依次匹配obj的特征向量与scene中检测的target的特征向量
             for index in range(bboxes.shape[0]):
-                target_item = target_items[index]
+                target_item = normalize(target_items[index])
                 #print(bboxes[index])
                 #print(target_item.shape)
                 keypoints = dict()
@@ -111,11 +121,9 @@ class SIFT_matcher():
                     keypoints["G"], descriptors["G"] = self.detectAndCompute(target_item[:,:,1])
                     keypoints["B"], descriptors["B"] = self.detectAndCompute(target_item[:,:,2])
                 elif imgMode == "Gray":
-                    t_target_item = cv2.cvtColor(target_item,cv2.COLOR_BGR2GRAY)
-                    keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(t_target_item)
+                    keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(target_item)
                 elif imgMode == "HSV":
-                    temp_target_item = cv2.cvtColor(target_item,cv2.COLOR_BGR2HSV)
-                    h_target, s, v = cv2.split(temp_target_item)
+                    h_target, s, v = cv2.split(target_item)
                 #仅使用H通道
                     keypoints["H"],descriptors["H"] = self.detectAndCompute(h_target)
                     print(descriptors["H"].shape)
@@ -131,9 +139,11 @@ class SIFT_matcher():
                         try:
                             matches = matcher.knnMatch(descriptors[key], objInfo[1][key],k=2)
                         except Exception as e:
-                            myLogger.error(e)
+                            #myLogger.error(e)
                             myLogger.error("knn调用出错")
-                            traceback.print_exc()
+                            print(descriptors[key].shape)
+                            print(objInfo[1][key].shape)
+                            #traceback.print_exc()
                             successFlag = False
 
 
@@ -190,7 +200,14 @@ class SIFT_matcher():
         scnensImgs：一个list，每个list中是一个numpy/Tensor格式的场景图片
         
         """
-        
+        #图片归一化
+        if normalize == None:
+            if imgMode == "RGB":
+                normalize = SIFT_matcher.defaultNormalize
+            elif imgMode == "Gray":
+                normalize = lambda x: SIFT_matcher.GrayNorm(cv2.cvtColor(x, cv2.COLOR_BGR2GRAY))
+            elif imgMode == "HSV":
+                normalize = lambda x: cv2.cvtColor(x, cv2.COLOR_BGR2HSV)
         #匹配器
         #flann算法匹配
         if usingFlann:
@@ -207,6 +224,8 @@ class SIFT_matcher():
         #先计算所有的特写图片的特征向量
         objInfos = []
         for obj in objs:
+            obj = normalize(obj)
+
             keypoints = dict()
             descriptors = dict()
             #print(obj.shape)
@@ -215,11 +234,9 @@ class SIFT_matcher():
                 keypoints["G"], descriptors["G"] = self.detectAndCompute(obj[:,:,1])
                 keypoints["B"], descriptors["B"] = self.detectAndCompute(obj[:,:,2])
             elif imgMode == "Gray":
-                t_obj = cv2.cvtColor(obj,cv2.COLOR_BGR2GRAY)
-                keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(t_obj)
+                keypoints["Gray"],descriptors["Gray"] = self.detectAndCompute(obj)
             elif imgMode == "HSV":
-                temp_obj = cv2.cvtColor(obj,cv2.COLOR_BGR2HSV)
-                h_obj, s, v = cv2.split(temp_obj)
+                h_obj, s, v = cv2.split(obj)
                 #仅使用H通道
                 keypoints["H"],descriptors["H"] = self.detectAndCompute(h_obj)
                 print(h_obj)
@@ -231,7 +248,8 @@ class SIFT_matcher():
 
         MaxMatchesEachScene = np.zeros(len(scenesImgs))
         for i,sceneImg in enumerate(scenesImgs):
-            
+            sceneImg = normalize(sceneImg)
+
             bboxes = sceneBboxes[i]
             #target_items = boxes.get_targetItems_by_boxes(sceneImg, np.array(bboxes).reshape(-1,4))
             #print(sceneImg.shape)
@@ -250,11 +268,9 @@ class SIFT_matcher():
                 SceneKeypoints["G"], SceneDescriptors["G"] = self.detectAndCompute(sceneImg[:,:,1])
                 SceneKeypoints["B"], SceneDescriptors["B"] = self.detectAndCompute(sceneImg[:,:,2])
             elif imgMode == "Gray":
-                t_sceneImg = cv2.cvtColor(sceneImg,cv2.COLOR_BGR2GRAY)
-                SceneKeypoints["Gray"],SceneDescriptors["Gray"] = self.detectAndCompute(t_sceneImg)
+                SceneKeypoints["Gray"],SceneDescriptors["Gray"] = self.detectAndCompute(sceneImg)
             elif imgMode == "HSV":
-                temp_sceneImg = cv2.cvtColor(sceneImg,cv2.COLOR_BGR2HSV)
-                h_scene, s, v = cv2.split(temp_sceneImg)
+                h_scene, s, v = cv2.split(sceneImg)
             #仅使用H通道
                 SceneKeypoints["H"],SceneDescriptors["H"] = self.detectAndCompute(h_scene)
                 print(descriptors["H"].shape)
@@ -464,6 +480,28 @@ class SIFT_matcher():
 
         return np.array(res),MaxPointsEachScene
     
+    def defaultNormalize(img):
+        assert  len(img.shape) == 3
+        
+        B,G,R = cv2.split(img)
+        
+        new_B = SIFT_matcher.GrayNorm(B)
+        new_G = SIFT_matcher.GrayNorm(G)
+        new_R = SIFT_matcher.GrayNorm(R)
+        
+        return (cv2.merge((new_B,new_G,new_R))*255).astype(np.uint8)
+    
+    #灰度图归一化
+    def GrayNorm(img):
+        assert len(img.shape) == 2
+        #灰度拉伸
+        minEl = img.min()
+        maxEl = img.max()
+        newImg = ((img - minEl)*(255/(maxEl - minEl))).astype(np.uint8)
+        #直方图均衡
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)) 
+        newImg = clahe.apply(newImg)
+        return newImg
 
 
 if __name__ == '__main__':

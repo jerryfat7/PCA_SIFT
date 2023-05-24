@@ -63,14 +63,15 @@ def evaluateOneObj(label, sceneBboxes, bestMatches, gtDict, iouThreshold, isPosi
     fd = 0  #目标检测未检测出杯子的次数
 
 
-    intLabel = int(label)
+    Label = str(int(label))
+
     for i in range(len(sceneBboxes)):
         gtInfo = gtDict[list(gtDict.keys())[i]]
         
         #首先根据gt判断这张图中是否存在目标杯子
         gtBox = None
         for labelInfo in gtInfo:
-            if intLabel == int(labelInfo["label"]):
+            if Label == labelInfo["label"]:
                 gtBox = np.array(labelInfo["bbox"])
                 break
         

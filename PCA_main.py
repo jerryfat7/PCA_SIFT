@@ -1,9 +1,10 @@
-from SIFT_matcher import SIFT_matcher
+from PCA_matcher import PCA_matcher
 import numpy as np
 import cv2
 import boxes
 #import torch
 #from SIFT_matcher import SIFT_matcher
+import classificationBoundary
 
 #for test
 from mylogging import myLogger
@@ -12,15 +13,13 @@ from detecter import detecter
 from myDataSet import myDataSet
 from evaluater import evaluateOneObj
 import time
-import classificationBoundary
+
 import os
 import os.path as osp
 import json
 
 if __name__ == '__main__':
 
-    funcs = ["MaxMatch", "MaxMatchV1", "MaxPoints"]
-    func = funcs[0]
     mode = "test"    #"train", "val", "test"
 
     jsonPath = mode + ".json"
@@ -33,14 +32,18 @@ if __name__ == '__main__':
         myLogger.info("no pre-detect boxes, generate detect boxes realtime")
         preDetectData = dict()
         preLoad = False
+    
     #加载数据集
     myLogger.info("lodaing DataSet")
     #root = r"D:\学习\大四下\模式识别\大作业_瓶子检测\miniTest"
     root = r"D:\学习\大四下\模式识别\大作业_瓶子检测\Personalized_Segmentation"
     dataSet = myDataSet(root)
     #dataSet = myDataSet()
+    #在哪个数据集的场景中匹配
     MugsSet, Scenes3Set, Scenes5Set = dataSet.getDataSet(mode)
     ScenesSet = Scenes3Set + Scenes5Set
+    #使用训练集中的杯子生成特征杯子空间
+    trainMugs ,_,__ = dataSet.getDataSet("train")
 
     #目标检测参数
     mydet = detecter()
@@ -59,7 +62,7 @@ if __name__ == '__main__':
     PositiveResult["DCWD"] = 0
     PositiveResult["fd"] = 0
     PositiveResult["count"] = 0
-    PositiveResult["maxMatchPoints"] = []
+    PositiveResult["minDistances"] = []
 
     NegativeResult = dict()
     NegativeResult["tp"] = 0
@@ -70,18 +73,53 @@ if __name__ == '__main__':
     NegativeResult["DCWD"] = 0
     NegativeResult["fd"] = 0
     NegativeResult["count"] = 0
-    NegativeResult["maxMatchPoints"] = []
+    NegativeResult["minDistances"] = []
 
+    #读取所有的特写照片
+    objImgs = []
+    for mugsFolder in trainMugs:
+        objImgs += dataSet.ReadMugsPictures(mugsFolder)
+    #SceneImgs = dataSet.ReadScenePictures(trainScenes3[1])
+    myLogger.info("训练集所用特写数量：{}".format(len(objImgs)))
     
+    #目标检测预处理
+    myLogger.info("generationg Bboxes for PCA train Sets")
+    start = time.time()
+
+    mydet = detecter()
+    #特写预处理,检测照片
+    newObjImgs = []
+    for ObjImg in objImgs:
+        #目标检测，保留大于detectThreshold和数量小于等于maxCandidateItems的结果
+        bboxes,scores = mydet.detect_sortedByScore(ObjImg, "cup")
+        assert bboxes.shape[0] > 0
+        cup_bbox = bboxes[0,:]
+
+        newObjImg = boxes.get_targetItems_by_boxes(ObjImg, cup_bbox.reshape(-1,4))[0]
+        
+        newObjImgs.append(newObjImg)
+    #PCA参数
+    PCA_distance_threshold = 1.5e4
+    norm = 2
+    n_components = 40
+    normalize = PCA_matcher.Default_normalize
+    #训练PCA模型
+    pcaModel = PCA_matcher(n_components)
+    pcaModel.train(newObjImgs, normalize)
+
+    end = time.time()
+    myLogger.info("time usage:{:.2f}s".format(end-start))
+
+    #训练完毕，在该PCA模型张成的子空间上进行匹配
+
     for SceneFolder in ScenesSet:
         SceneImgs = dataSet.ReadScenePictures(SceneFolder)
-        
+
         if not preLoad or preDetectData.get(SceneFolder) is None:
             #目标检测预处理
             myLogger.info("generationg Scene Bboxes")
             start = time.time()
             #场景杯子检测
-            
             sceneBboxes = []
 
             for SceneImg in SceneImgs:
@@ -126,97 +164,32 @@ if __name__ == '__main__':
                 cup_bbox = bboxes[0,:]
 
                 newObjImg = boxes.get_targetItems_by_boxes(ObjImg, cup_bbox.reshape(-1,4))[0]
-                newObjImgs.append(newObjImg)
-                
+                newObjImgs.append(PCA_matcher.Default_normalize(newObjImg)) 
+            
             objImgs = newObjImgs
             
             
             end = time.time()
             myLogger.info("time usage:{:.2f}s".format(end-start))
 
-            myLogger.info("doing SIFT")
+            myLogger.info("doing PCA match")
             start = time.time()
 
-            if func == "MaxMatch":
-                MatchesNumPrior = True
-                pointsThreshold = 5
-                picturesThreshold = 1
-                edgeThreshold = 11
-                normType = cv2.NORM_L2
-                ratio = 0.7
-                contrastThreshold = 0.03
-                sigma = 3.5
-                usingFlann = True
-                imgMode = "RGB"
+            #模型推断匹配
+            bestMatches, minDistances = pcaModel.MatchObjInSecene(objImgs, sceneBboxes, SceneImgs, PCA_distance_threshold, norm, normalize)
 
-                myLogger.warning("MatchesNumPrior,pointsThreshold,picturesThreshold,normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold")
-                myLogger.warning("参数：{}，{}，{}，{}，{}，{}，{}，{}，{}".format(MatchesNumPrior,pointsThreshold,\
-                    picturesThreshold,normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold))
-
-                sift = cv2.xfeatures2d.SIFT_create(sigma = sigma, contrastThreshold = contrastThreshold,edgeThreshold = edgeThreshold)
-                mySiftMatcher = SIFT_matcher(sift=sift)
-
-                bestMatches,MaxMatchesCount = mySiftMatcher.MatchObjInSeceneUsingMaxMatches(objImgs,sceneBboxes,\
-                                                            SceneImgs,pointsThreshold,picturesThreshold,ratio,normType,\
-                                                            MatchesNumPrior,usingFlann, imgMode)
-
-            elif func == "MaxMatchV1":
-                MatchesNumPrior = False
-                pointsThreshold = 8
-                picturesThreshold = 1
-                edgeThreshold = 11
-                normType = cv2.NORM_L2
-                ratio = 0.7
-                contrastThreshold = 0.02
-                sigma = 1
-                usingFlann = True
-                imgMode = "RGB"
-
-                myLogger.warning("MatchesNumPrior,pointsThreshold,picturesThreshold,normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold")
-                myLogger.warning("参数：{}，{}，{}，{}，{}，{}，{}，{}，{}".format(MatchesNumPrior,pointsThreshold,\
-                    picturesThreshold,normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold))
-
-                sift = cv2.xfeatures2d.SIFT_create(sigma = sigma, contrastThreshold = contrastThreshold,edgeThreshold = edgeThreshold)
-                mySiftMatcher = SIFT_matcher(sift=sift)
-
-                bestMatches,MaxMatchesCount = mySiftMatcher.MatchObjInSeceneUsingMaxMatches_v1(objImgs,sceneBboxes,\
-                                                            SceneImgs,pointsThreshold,picturesThreshold,ratio,normType,\
-                                                            MatchesNumPrior,usingFlann, imgMode)
-
-            elif func == "MaxPoints":
-                sigma = 3
-                contrastThreshold = 0.03
-                edgeThreshold = 11
-                ratio = 0.7
-                #detectThreshold = 0.01
-                detectThreshold = 8
-                normType = cv2.NORM_L2
-                imgMode = "RGB"
-                usingFlann = True
-
-                myLogger.info("detectThreshold，normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold")
-                myLogger.info("参数：{}，{}，{}，{}，{}，{}，{}".format(detectThreshold, normType,imgMode,ratio,sigma,contrastThreshold,edgeThreshold))
-                sift = None
-                sift = cv2.xfeatures2d.SIFT_create(sigma = sigma, contrastThreshold = contrastThreshold, edgeThreshold = edgeThreshold)
-
-                mySiftMatcher = SIFT_matcher(sift=sift)
-
-                bestMatches,MaxMatchesCount = mySiftMatcher.MatchObjInSeceneUsingMaxPoints(objImgs,sceneBboxes,\
-                                                            SceneImgs,ratio,normType,detectThreshold,\
-                                                            usingFlann, imgMode)
-                #print(bestMatches)
 
             end = time.time()
             myLogger.info("time usage:{:.2f}s".format(end-start))
 
             myLogger.info("evaluating")
+            
             #评价指标
             annotationData = dataSet.GetAnnotation(SceneFolder)
             iouThreshold = 0.9
             #判断是否为正样本（该场景中有杯子出现）
             isPositiveSample = dataSet.isPositiveSample(mugsFolder, SceneFolder)
 
-            #testMugs[1]是mug_14,testScenes3[0]是scene_23,其中含有mug_14
             tp,fp,tn,fn,DenyClassification, DenyClassificationWithDetection, fd = evaluateOneObj(label,\
                                             sceneBboxes, bestMatches,\
                                             annotationData,iouThreshold,isPositiveSample)
@@ -235,7 +208,7 @@ if __name__ == '__main__':
             recordDict["DCWD"] += DenyClassificationWithDetection
             recordDict["fd"] += fd
             recordDict["count"] += 1
-            recordDict["maxMatchPoints"].append(MaxMatchesCount)
+            recordDict["minDistances"].append(minDistances)
             if isPositiveSample:
                 myLogger.warning("是正样本")
             else:
@@ -243,7 +216,7 @@ if __name__ == '__main__':
             #print("tp:{},fp-fn:{},fd:{}".format())
             myLogger.warning("tp,fp,tn,fn,fd\n"+"{} {} {} {} {}".format(tp,fp,tn,fn,fd))
             myLogger.warning("DenyClassification, DenyClassificationWithDetection\n"+"{} {}".format(DenyClassification, DenyClassificationWithDetection))
-            np.save(r".\result\{}+{}".format(mugsFolder,SceneFolder), MaxMatchesCount)
+            np.save(r".\result\{}+{}".format(mugsFolder,SceneFolder), minDistances)
 
     #正样本分类准确率=正确识别到杯子的次数/目标检测模型识别到目标杯子框，且SIFT不识别为不存在的次数
     #fn-fp是错误地识别为不存在的次数，因为如果存在目标杯子，则fp和fn应始终相等，存在但是未识别会导致fp单增
@@ -256,22 +229,24 @@ if __name__ == '__main__':
     #目标检测模型正样本拒绝错误率=存在目标杯子但是目标检测模型未识别的次数
     pos_detctor_false_detect_rate = PositiveResult["fd"] / (100 * PositiveResult["count"])
 
-    #SIFT模型正样本拒绝错误率=标检测模型识别到目标杯子框，但是SIFT模型未识别的次数
-    pos_SIFT_false_detect_rate = (PositiveResult["fn"] - PositiveResult["fp"])/ (100 * PositiveResult["count"])
+    #PCA模型正样本拒绝错误率=标检测模型识别到目标杯子框，但是SIFT模型未识别的次数
+    pos_PCA_false_detect_rate = (PositiveResult["fn"] - PositiveResult["fp"])/ (100 * PositiveResult["count"])
     #负样本拒绝准确率
     neg_reject_acc = 1 - NegativeResult["fp"] / (100 * NegativeResult["count"])
 
     myLogger.warning("正样本分类准确率:{:.3f}".format(pos_classify_acc))
     myLogger.warning("目标检测模型正样本拒绝错误率:{:.3f}".format(pos_detctor_false_detect_rate))
-    myLogger.warning("SIFT模型正样本拒绝错误率:{:.3f}".format(pos_SIFT_false_detect_rate))
+    myLogger.warning("PCA模型正样本拒绝错误率:{:.3f}".format(pos_PCA_false_detect_rate))
     myLogger.warning("负样本拒绝准确率:{:.3f}".format(neg_reject_acc))
 
     myLogger.warning(PositiveResult)
     myLogger.warning(NegativeResult)
-    # 保存最优匹配的特征点匹配个数
-    P_toSave = np.stack(PositiveResult["maxMatchPoints"])
-    N_toSave = np.stack(NegativeResult["maxMatchPoints"])
+    # 储存每个最优匹配的最低距离
+    P_toSave = np.stack(PositiveResult["minDistances"])
+    N_toSave = np.stack(NegativeResult["minDistances"])
 
+    #根据最短距离进行SVM分类，提供一个建议分割面
+    #首先平衡正负样本
     po,ne = classificationBoundary.balancePositiveAndNegative(P_toSave, N_toSave, 1)
     suggestedBound = classificationBoundary.getClassifyPointSVM(po,ne)
     myLogger.warning("SVM计算的最优分割面应为：{}".format(suggestedBound))
